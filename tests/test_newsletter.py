@@ -146,4 +146,132 @@ class TestNewsletterGenerator:
         """Test stats section generation"""
         stats = generator._generate_stats(sample_data)
         
-        assert "##
+        assert "## 📊 Weekly Stats" in stats
+        assert "15,000" in stats  # formatted total stars
+        assert "3,200" in stats   # formatted total forks
+        assert "Python, JavaScript, TypeScript, Go" in stats
+        assert "Top Performing Repositories" in stats
+        assert "| Repository | Stars | Forks | Language |" in stats
+        assert "| **awesome-ml** | 2,500 | 500 | Python |" in stats
+    
+    def test_generate_stats_empty(self, generator):
+        """Test stats generation with no data"""
+        empty_data = {"weekly_stats": {}}
+        stats = generator._generate_stats(empty_data)
+        
+        assert "## 📊 Weekly Stats" in stats
+        assert "Stats unavailable" in stats
+    
+    def test_generate_footer(self, generator, sample_data):
+        """Test footer generation"""
+        footer = generator._generate_footer(sample_data)
+        
+        assert "## 🔮 Looking Ahead" in footer
+        assert "What to Watch:" in footer
+        assert "That's a wrap for this week!" in footer
+        assert "Share this newsletter" in footer
+    
+    def test_newsletter_sections_integration(self, generator):
+        """Test that all sections integrate properly"""
+        # Test with minimal data
+        minimal_data = {
+            "trending_repos": [
+                {
+                    "name": "test-repo",
+                    "owner": {"login": "testuser"},
+                    "description": "Test description",
+                    "html_url": "https://github.com/test/repo",
+                    "stargazers_count": 100,
+                    "language": "Python"
+                }
+            ],
+            "discussions": [
+                {
+                    "title": "Test Discussion",
+                    "body": "Test body",
+                    "html_url": "https://github.com/test/issue/1"
+                }
+            ],
+            "weekly_stats": {
+                "total_stars": 100,
+                "languages": ["Python"]
+            },
+            "generation_timestamp": "2025-09-09T12:00:00Z"
+        }
+        
+        newsletter = generator.generate_newsletter(minimal_data)
+        
+        # Check that sections are properly separated
+        sections = newsletter.split("\n\n---\n\n")
+        assert len(sections) >= 5  # At least 5 main sections
+        
+        # Each section should have proper headers
+        assert any("🤖 AI Weekly Newsletter" in section for section in sections)
+        assert any("📰 Top 3 AI Highlights" in section for section in sections)
+        assert any("📊 Weekly Stats" in section for section in sections)
+    
+    def test_data_sanitization(self, generator):
+        """Test that newsletter handles malformed data gracefully"""
+        malformed_data = {
+            "trending_repos": [
+                {
+                    "name": None,  # None value
+                    "owner": {"login": "testuser"},
+                    "description": "",  # Empty string
+                    "html_url": "https://github.com/test/repo",
+                    "stargazers_count": "not_a_number",  # Wrong type
+                    "language": "Python"
+                }
+            ],
+            "discussions": [
+                {
+                    "title": "Test Discussion",
+                    # Missing body
+                    "html_url": "https://github.com/test/issue/1"
+                }
+            ],
+            "weekly_stats": None,  # None stats
+            "generation_timestamp": "2025-09-09T12:00:00Z"
+        }
+        
+        # Should not raise exceptions
+        newsletter = generator.generate_newsletter(malformed_data)
+        
+        assert "# 🤖 AI Weekly Newsletter" in newsletter
+        assert "Unknown" in newsletter or "No description" in newsletter
+
+
+class TestNewsletterHelpers:
+    """Test helper functions and edge cases"""
+    
+    def test_newsletter_with_special_characters(self):
+        """Test newsletter handles special characters in descriptions"""
+        generator = NewsletterGenerator()
+        
+        special_data = {
+            "trending_repos": [
+                {
+                    "name": "special-chars",
+                    "owner": {"login": "user"},
+                    "description": "Repository with **bold** and `code` and [links](url)",
+                    "html_url": "https://github.com/user/special-chars",
+                    "stargazers_count": 50,
+                    "language": "Python"
+                }
+            ],
+            "discussions": [
+                {
+                    "title": "Discussion with *markdown* and #hashtags",
+                    "body": "Body with **formatting** and ```code blocks```",
+                    "html_url": "https://github.com/test/issue/1"
+                }
+            ],
+            "weekly_stats": {"total_stars": 50},
+            "generation_timestamp": "2025-09-09T12:00:00Z"
+        }
+        
+        newsletter = generator.generate_newsletter(special_data)
+        
+        # Should handle special characters gracefully
+        assert "special-chars" in newsletter
+        assert "Discussion with" in newsletter
