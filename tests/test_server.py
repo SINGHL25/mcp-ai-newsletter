@@ -120,4 +120,188 @@ class TestMCPServer:
         """Test direct trending repos endpoint"""
         
         mock_repos.return_value = asyncio.Future()
-        mock_repos.return_value.set_result(mock_githu
+        mock_repos.return_value.set_result(mock_github_data["trending_repos"])
+        
+        response = client.get("/trending-repos?days=7&limit=5")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) >= 1
+        assert data[0]["name"] == "ai-framework"
+    
+    @patch('src.server.github_adapter.get_ai_discussions')
+    def test_ai_discussions_endpoint(self, mock_discussions, client, mock_github_data):
+        """Test direct discussions endpoint"""
+        
+        mock_discussions.return_value = asyncio.Future()
+        mock_discussions.return_value.set_result(mock_github_data["discussions"])
+        
+        response = client.get("/ai-discussions?days=7&limit=5")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) >= 1
+        assert data[0]["title"] == "AI Safety Guidelines"
+    
+    def test_generate_newsletter_data_default_params(self, client):
+        """Test newsletter generation with default parameters"""
+        with patch('src.server.github_adapter.get_trending_ai_repos') as mock_repos, \
+             patch('src.server.github_adapter.get_ai_discussions') as mock_discussions:
+            
+            mock_repos.return_value = asyncio.Future()
+            mock_repos.return_value.set_result([])
+            
+            mock_discussions.return_value = asyncio.Future()
+            mock_discussions.return_value.set_result([])
+            
+            response = client.post("/generate-newsletter-data", json={})
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check default values were used
+            assert "trending_repos" in data
+            assert "discussions" in data
+
+
+class TestGitHubAdapterIntegration:
+    """Integration tests for GitHub adapter with server"""
+    
+    @pytest.fixture
+    def adapter(self):
+        """Create GitHub adapter instance"""
+        return GitHubAdapter()
+    
+    @pytest.mark.asyncio
+    async def test_adapter_with_mock_httpx(self, adapter):
+        """Test adapter with mocked HTTP client"""
+        
+        mock_response_data = {
+            "items": [
+                {
+                    "name": "test-ai-lib",
+                    "full_name": "user/test-ai-lib",
+                    "owner": {"login": "user"},
+                    "description": "Test AI library",
+                    "html_url": "https://github.com/user/test-ai-lib",
+                    "stargazers_count": 100,
+                    "language": "Python",
+                    "created_at": "2025-09-01T00:00:00Z"
+                }
+            ]
+        }
+        
+        with patch('httpx.AsyncClient') as mock_client:
+            # Setup mock response
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_response_data
+            
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+            
+            # Test trending repos
+            repos = await adapter.get_trending_ai_repos(7)
+            
+            assert len(repos) >= 1
+            assert repos[0]["name"] == "test-ai-lib"
+    
+    @pytest.mark.asyncio 
+    async def test_adapter_rate_limiting(self, adapter):
+        """Test that adapter respects rate limiting"""
+        
+        with patch('httpx.AsyncClient') as mock_client, \
+             patch('asyncio.sleep') as mock_sleep:
+            
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"items": []}
+            
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+            
+            await adapter.get_trending_ai_repos(7)
+            
+            # Should call sleep for rate limiting
+            assert mock_sleep.called
+    
+    @pytest.mark.asyncio
+    async def test_adapter_error_handling(self, adapter):
+        """Test adapter handles HTTP errors gracefully"""
+        
+        with patch('httpx.AsyncClient') as mock_client:
+            # Setup mock error response
+            mock_response = MagicMock()
+            mock_response.status_code = 403  # Rate limited
+            
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+            
+            # Should return empty list on error, not raise exception
+            repos = await adapter.get_trending_ai_repos(7)
+            assert repos == []
+
+
+class TestServerConfiguration:
+    """Test server configuration and setup"""
+    
+    def test_server_metadata(self, client):
+        """Test server metadata in OpenAPI spec"""
+        response = client.get("/openapi.json")
+        
+        assert response.status_code == 200
+        spec = response.json()
+        
+        assert spec["info"]["title"] == "AI Newsletter MCP Server"
+        assert spec["info"]["description"] == "MCP server for AI newsletter generation"
+        assert spec["info"]["version"] == "1.0.0"
+    
+    def test_cors_configuration(self, client):
+        """Test CORS headers if configured"""
+        response = client.get("/health")
+        
+        # Basic response test - CORS would be configured in actual deployment
+        assert response.status_code == 200
+    
+    def test_request_validation_schemas(self, client):
+        """Test Pydantic model validation"""
+        # Test valid request
+        valid_request = {
+            "days": 7,
+            "include_stats": True,
+            "max_repos": 10
+        }
+        
+        with patch('src.server.github_adapter.get_trending_ai_repos') as mock_repos, \
+             patch('src.server.github_adapter.get_ai_discussions') as mock_discussions:
+            
+            mock_repos.return_value = asyncio.Future()
+            mock_repos.return_value.set_result([])
+            
+            mock_discussions.return_value = asyncio.Future()
+            mock_discussions.return_value.set_result([])
+            
+            response = client.post("/generate-newsletter-data", json=valid_request)
+            assert response.status_code == 200
+        
+        # Test invalid request
+        invalid_request = {
+            "days": -5,  # Negative days
+            "include_stats": "maybe",  # Wrong type
+            "max_repos": "unlimited"  # Wrong type
+        }
+        
+        response = client.post("/generate-newsletter-data", json=invalid_request)
+        assert response.status_code == 422
+
+
+# Test fixtures for async operations
+@pytest.fixture
+def event_loop():
+    """Create event loop for async tests"""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
